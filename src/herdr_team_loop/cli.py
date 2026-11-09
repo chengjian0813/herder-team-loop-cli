@@ -108,6 +108,11 @@ def _build_parser():
     entry.add_argument("--deadline", type=float, help="Absolute Unix timestamp; does not reset on resume")
     entry.add_argument("--attach-terminal")
     entry.add_argument("--resource", action="append", default=[])
+    entry = command("run", actions, "extend-budget", "Record an authorized increase of total active time without resetting progress")
+    run_id(entry)
+    entry.add_argument("--active-minutes", type=float, required=True, help="New total active-time limit, not extra minutes")
+    entry.add_argument("--reason", required=True)
+    entry.add_argument("--authorization-source", required=True)
     for action, description in (("status", "Read current state"), ("next", "Read the coordinator's permitted next action"),
                                 ("attach", "Return the original coordinator terminal")):
         run_id(command("run", actions, action, description))
@@ -162,7 +167,10 @@ def _build_parser():
     entry = command("assignment", actions, "confirm-delivery", "Record observed evidence that the original task was delivered")
     assignment_id(entry)
     entry.add_argument("--evidence", required=True)
-    assignment_id(command("assignment", actions, "deliver", "Deliver the original task only when initial delivery is proven unsent"))
+    entry = command("assignment", actions, "deliver", "Deliver the original task only when initial delivery is proven unsent")
+    assignment_id(entry)
+    text_or_file(entry, "ready-evidence")
+    entry.add_argument("--ready-turn", type=int, help="Observed original terminal turn; required with manual readiness evidence when status is null")
     entry = command("assignment", actions, "terminate", "Coordinator stops one worker; operation outcomes still need checking")
     assignment_id(entry)
     text_or_file(entry, "checkpoint", required=True)
@@ -360,6 +368,11 @@ class _Application:
                 assignment = self.assignment(args.assignment, coordinator=action in ("retire", "terminate"))
             if action == "confirm-delivery":
                 return self.runs.assignments.confirm_delivery(assignment["id"], args.evidence)
+            if action == "deliver":
+                ready_evidence = _text_argument(args, "ready_evidence")
+                if ready_evidence or args.ready_turn is not None:
+                    require(not args.actor, "manual_recovery_required", "Readiness without a status hook requires the initiating operator's observed evidence, not an assignment actor")
+                return self.runs.assignments.deliver(assignment["id"], ready_evidence=ready_evidence, ready_turn=args.ready_turn)
             if action == "terminate":
                 return self.runs.terminate_assignment(assignment["id"], args.actor, _text_argument(args, "checkpoint"))
             if action == "retire":
@@ -430,6 +443,9 @@ class _Application:
                                    no_progress_limit=args.no_progress_limit, deadline=args.deadline,
                                    attach_terminal=args.attach_terminal, resources=args.resource)
         run = self.object("runs", args.run)
+        if action == "extend-budget":
+            require(not args.actor, "manual_recovery_required", "Only the initiating operator may record an explicitly authorized budget increase")
+            return self.runs.extend_budget(run["id"], args.active_minutes, args.reason, args.authorization_source)
         if action in ("status", "watch", "attach"):
             self.actor_for_run(run["id"])
             if action == "status":

@@ -256,7 +256,42 @@ class CliTests(unittest.TestCase):
             self.invoke([*arguments, "--actor", coordinator["id"]])
             self.invoke(arguments)
         self.assertEqual(deliver.call_count, 2)
-        deliver.assert_called_with(worker["id"])
+        deliver.assert_called_with(worker["id"], ready_evidence="", ready_turn=None)
+
+    def test_manual_readiness_evidence_cannot_be_asserted_by_an_assignment_actor(self):
+        workspace = self.initialize()
+        requirement = self.requirement()
+        _, coordinator, worker = self.seed_run(workspace, requirement)
+        evidence = self.root / "readiness.md"
+        evidence.write_text("Original terminal shows the empty agent prompt after trust; turn 0.")
+        arguments = ["assignment", "deliver", "--assignment", worker["id"],
+                     "--ready-evidence-file", evidence, "--ready-turn", "0"]
+        with patch("herdr_team_loop.assignments.AssignmentService.deliver",
+                   return_value={"first_message_sent": True}) as deliver:
+            denied = self.invoke([*arguments, "--actor", coordinator["id"]], expected=2)
+            self.assertEqual(denied["error"]["code"], "manual_recovery_required")
+            deliver.assert_not_called()
+            self.invoke(arguments)
+            deliver.assert_called_once_with(worker["id"], ready_evidence=evidence.read_text(), ready_turn=0)
+
+    def test_budget_extension_requires_operator_and_preserves_authorization_source(self):
+        workspace = self.initialize()
+        requirement = self.requirement()
+        run, coordinator, worker = self.seed_run(workspace, requirement)
+        arguments = ["run", "extend-budget", "--run", run["id"], "--active-minutes", "60",
+                     "--reason", "Startup recovery consumed the original limit", "--authorization-source", "Explicit initiating request"]
+        with patch("herdr_team_loop.runs.RunService.extend_budget", return_value={"id": run["id"]}) as extend:
+            for actor in (coordinator, worker):
+                denied = self.invoke([*arguments, "--actor", actor["id"]], expected=2)
+                self.assertEqual(denied["error"]["code"], "manual_recovery_required")
+            extend.assert_not_called()
+            self.invoke(arguments)
+            extend.assert_called_once_with(run["id"], 60.0, arguments[-3], arguments[-1])
+
+    def test_budget_extension_requires_explicit_reason_and_source(self):
+        for suffix in ([], ["--reason", "Recovery"], ["--authorization-source", "User reply"]):
+            result = self.cli("run", "extend-budget", "--run", "unused", "--active-minutes", "60", *suffix, expected=2)
+            self.assertEqual(result["error"]["code"], "invalid_arguments")
 
     def test_terminate_routes_checkpoint_to_coordinator_service_without_retiring(self):
         workspace = self.initialize()

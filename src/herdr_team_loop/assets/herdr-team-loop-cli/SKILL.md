@@ -32,6 +32,8 @@ description: 使用 herdr-team-loop-cli 初始化 workspace 团队、创建需�
 
 - 投递未知先 `assignment reconcile/observe`，核对原终端；人工确认用 `confirm-delivery --evidence`。查不到终端不等于从未执行，不盲目重发。
 - 仅原终端明确 `first_message.sent=false` 且解决对话后处于 `idle/done` 时，由主控或人工用 `assignment deliver --assignment ID` 补投原任务一次；响应不明禁止重试。
+- 若原终端明确 `status=null`，由发起方实际观察空输入提示、确认启动对话已结束，用 `--ready-evidence-file PATH --ready-turn N` 绑定当前 turn；assignment actor 不可使用该人工恢复选项，不能绕过 working/blocked 或未知投递。
+- 扩大预算需已有明确授权，由发起方（不带 actor）用 `run extend-budget --active-minutes TOTAL --reason TEXT --authorization-source TEXT` 记录真实来源。总上限增加不重置已用时间、轮次、阶段和绝对 deadline，也不自动推进。
 - 额度或工具故障先保存 checkpoint，必要时 `assignment terminate`；核对在途结果后 `run handoff --operations-checked`。终止进程不等于远端操作回滚。
 - 主控失联先核对旧主控停止调度，再 `run takeover`，保留已有 worker。
 - 补测/输入变更使用 `run resume --revalidate` 连同 checkpoint、操作核对和旧 owner 检查；不新建 run 绕过预算。

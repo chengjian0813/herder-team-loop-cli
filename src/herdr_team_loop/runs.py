@@ -117,6 +117,33 @@ class RunService:
                 "assignments": self.store.list("assignments", run_id=run_id), "bugs": self.bugs.list(run_id),
                 "pending_decisions": self.bugs.pending(run_id)}
 
+    def extend_budget(self, run_id: str, active_minutes: float, reason: str, authorization_source: str) -> dict:
+        require(type(active_minutes) in (int, float), "invalid_budget", "Active minutes must be a positive finite number")
+        try:
+            limit = active_minutes * 60.0
+        except OverflowError:
+            raise LoopError("invalid_budget", "Active minutes must be a positive finite number") from None
+        require(math.isfinite(limit) and limit > 0, "invalid_budget", "Active minutes must be a positive finite number")
+        require(isinstance(reason, str) and reason.strip(), "reason_required", "Budget extension requires a reason")
+        require(isinstance(authorization_source, str) and authorization_source.strip(),
+                "authorization_required", "Budget extension requires the explicit authorization source")
+        with self.store.transaction():
+            run = self.store.get("runs", run_id)
+            require(run["status"] in ("ACTIVE", "BLOCKED", "WAITING_DECISION"),
+                    "cannot_extend_budget", "Ended or stopping runs cannot receive more execution time")
+            now = time.time()
+            require(run.get("deadline") is None or now < run["deadline"],
+                    "budget_exhausted", "Absolute deadline reached; extending active time cannot change it")
+            elapsed = active_seconds(run, now)
+            require(limit > run["active_limit_seconds"] and limit > elapsed,
+                    "invalid_budget", "New total active time must exceed both the current limit and elapsed time")
+            # Extending the cap never resets elapsed time or resumes a blocked execution.
+            result = self.store.update("runs", run_id, {"active_limit_seconds": limit})
+            self._event(run, "budget_extended", previous_active_limit_seconds=run["active_limit_seconds"],
+                        active_limit_seconds=limit, active_elapsed_seconds=elapsed,
+                        reason=reason, authorization_source=authorization_source)
+            return result
+
     def next(self, run_id: str, actor: str) -> dict:
         run = self.require_coordinator(run_id, actor)
         workers = self._workers(run_id)

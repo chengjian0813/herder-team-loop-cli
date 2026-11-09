@@ -120,15 +120,17 @@ herdr-team-loop-cli --actor "$PM_ID" run dispatch --run "$RUN_ID" --bug "$BUG_ID
 
 - 投递不明：assignment reconcile 找原终端，assignment observe 读取输出；人工核对已送达后 confirm-delivery --evidence。原 Herdr 终端的领取可自动证明接收；不自动重发业务任务。
 - 已知未送达：原终端明确 `first_message.sent=false` 且已解决信任或权限对话、状态为 `idle/done` 后，由主控或人工执行 `assignment deliver --assignment ID`，向同一终端补投原任务一次；发送意图先持久化，响应不明则保持 UNKNOWN，禁止盲目重试。
+- 未上报状态：只有明确 `status=null` 时，发起方核对原终端已进入空输入提示、信任/权限对话已结束，再用 `assignment deliver --assignment ID --ready-evidence-file PATH --ready-turn N` 记录证据并绑定当前 turn。不能带 assignment actor，不能用它绕过 working/blocked 或未知投递；证据不能代替真实观察。
 - 交接：assignment block --reason --checkpoint-file 保存断点，必要时 assignment terminate --checkpoint-file 结束本工具 worker 并保持 BLOCKED。核对在途结果后 run handoff --checkpoint-file --operations-checked 使用候补。
 - 无需交接：确认旧终端结束后 assignment retire --reason --checkpoint-file --operations-checked。查不到终端不等于已停止。
 - 主控接管：run takeover --old-pm-stopped --checkpoint-file --reason 更新 epoch，保留已有 worker，旧主控不能继续推进。
 - 补测/输入变化：run resume --revalidate --checkpoint-file --operations-checked --old-owner-stopped。未变输入复用有效审查/环境；代码变化则重新验证。方案适用性单独核对。
 - 停工：run stop --reason 停止新派工；--terminate 结束本 run 管理的终端，人工附着终端和正在执行停止命令的协调终端除外。--operations-checked 记录副作用核对；未核对时保持 STOPPING，不能再推进 DONE。
 - 等决定：没有 worker、没有可继续独立修复且有 pending decision 才可 run pause 停计活跃预算。绝对 deadline 不暂停，resume 不重置预算和轮次。
+- 预算扩大：有明确授权后，由发起方（不带 `--actor`）执行 `run extend-budget --run ID --active-minutes TOTAL --reason TEXT --authorization-source TEXT`。TOTAL 是新的总分钟数；命令记录旧/新上限、已用时间、原因和真实授权来源，不重置已用时间、轮次或阶段，不修改绝对 deadline，也不自动派工。assignment 不能为自己扩大预算；来源文本本身不能创造授权。
 
 ## 存储和当前限制
 
 workspace export 导出该 workspace 的记录与已核验正文；storage backup --destination NEW_DIR 用 SQLite backup API 创建一致性备份并复制引用 artifact。导出不自动恢复外部终端。
 
-v0.1 不包含旧 loop-state 自动导入、跨机器运行恢复、预算扩容命令、后台通知、任意 DAG 或自动业务部署。同一 OS 用户下的 actor/决定来源是可审计协议，不是安全认证边界。
+v0.1 不包含旧 loop-state 自动导入、跨机器运行恢复、后台通知、任意 DAG 或自动业务部署。同一 OS 用户下的 actor/决定来源是可审计协议，不是安全认证边界。

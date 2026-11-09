@@ -220,7 +220,7 @@ class AssignmentService:
                     "stale_proposal", "Repair proposal changed before task delivery")
         return run
 
-    def deliver(self, assignment_id: str) -> dict:
+    def deliver(self, assignment_id: str, ready_evidence: str = "", ready_turn: int | None = None) -> dict:
         assignment = self.store.get("assignments", assignment_id)
         self._require_unsent(assignment)
         # Reconcile validates ownership labels. Do not send while trust/permission
@@ -231,19 +231,30 @@ class AssignmentService:
         state = observed.get("observation", {})
         require(state.get("state") == "live" and state.get("first_message", {}).get("sent") is False,
                 "delivery_not_retryable", "Current terminal does not prove the original task was unsent")
-        status = state.get("status")
-        status = status.get("state") if isinstance(status, dict) else status
-        require(status in ("idle", "done"), "terminal_not_ready", "Resolve the terminal's current dialog or work before delivery")
+        raw_status = state.get("status")
+        status = raw_status.get("state") if isinstance(raw_status, dict) else raw_status
+        readiness = {}
+        if "status" in state and raw_status is None:
+            # Agents without status hooks require explicit human evidence bound
+            # to this observed turn, never an inferred or stale readiness claim.
+            require(isinstance(ready_evidence, str) and ready_evidence.strip()
+                    and type(ready_turn) is int and ready_turn >= 0
+                    and type(state.get("turn")) is int and state["turn"] == ready_turn,
+                    "terminal_not_ready", "A terminal without status requires readiness evidence for its current turn")
+            readiness = {"ready_evidence": ready_evidence.strip(), "ready_turn": ready_turn}
+        else:
+            require(status in ("idle", "done"), "terminal_not_ready", "Resolve the terminal's current dialog or work before delivery")
         with self.store.transaction():
             assignment = self.store.get("assignments", assignment_id)
             self._require_unsent(assignment)
             # Older known-unsent records did not snapshot the message. Their frozen
             # assignment/run inputs reconstruct it once; all attempts retain it.
             message = assignment.get("initial_message") or self.message(assignment)
-            attempt = {"id": identifier("del"), "status": "SENDING", "started_at": time.time()}
+            attempt = {"id": identifier("del"), "status": "SENDING", "started_at": time.time(), **readiness}
+            event_data = {"delivery_id": attempt["id"], **readiness}
             self.store.update("assignments", assignment_id, {"initial_message": message, "delivery_attempt": attempt})
             self.store.event("delivery_requested", run_id=assignment["run_id"], assignment_id=assignment_id,
-                             workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
+                             workspace_id=assignment["workspace_id"], data=event_data)
         try:
             result = self.runtime.send(assignment["terminal"], message)
             # hc 0.1.19 SendResult.turn records when the text went in. `started`
@@ -260,7 +271,7 @@ class AssignmentService:
                     changes["status"] = "UNKNOWN"
                 current = self.store.update("assignments", assignment_id, changes)
                 self.store.event("delivery_received" if received else "delivery_unknown", run_id=assignment["run_id"],
-                                 assignment_id=assignment_id, workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
+                                 assignment_id=assignment_id, workspace_id=assignment["workspace_id"], data=event_data)
             if received:
                 return current
             raise LoopError("delivery_unknown", "Task delivery is uncertain; inspect the original terminal and never resend blindly",
@@ -270,7 +281,7 @@ class AssignmentService:
             result = self.store.update("assignments", assignment_id, {
                 "first_message_sent": True, "delivery_attempt": {**attempt, "status": "SENT", "turn": result["turn"]}})
             self.store.event("delivery_received", run_id=assignment["run_id"], assignment_id=assignment_id,
-                             workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
+                             workspace_id=assignment["workspace_id"], data=event_data)
             return result
 
     def block(self, assignment_id: str, reason: str, checkpoint: str) -> dict:

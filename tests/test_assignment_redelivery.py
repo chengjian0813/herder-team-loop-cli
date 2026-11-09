@@ -45,8 +45,8 @@ class RedeliveryTests(unittest.TestCase):
                                       mode="review", repos=[str(self.fixture.repo)])
         self.assignment = self.store.get("assignments", self.run["coordinator_id"])
 
-    def deliver(self):
-        return self.service.assignments.deliver(self.assignment["id"])
+    def deliver(self, **readiness):
+        return self.service.assignments.deliver(self.assignment["id"], **readiness)
 
     def test_known_unsent_delivers_same_task_once_even_without_started(self):
         result = self.deliver()
@@ -138,6 +138,95 @@ class RedeliveryTests(unittest.TestCase):
                     self.deliver()
                 self.assertEqual(error.exception.code, "terminal_not_ready")
         self.assertEqual(self.runtime.sends, [])
+
+    def test_null_status_requires_manual_evidence_and_current_turn_and_records_it_before_send(self):
+        self.runtime.terminals[self.assignment["terminal"]].update(status=None, turn=0)
+        readiness = {"ready_evidence": "Observed the original Cursor prompt ready for input", "ready_turn": 0}
+        def check_pending_delivery(terminal):
+            attempt = self.store.get("assignments", self.assignment["id"])["delivery_attempt"]
+            self.assertEqual(attempt["status"], "SENDING")
+            self.assertEqual({key: attempt[key] for key in readiness}, readiness)
+            event = self.store.events(self.run["id"])[-1]
+            self.assertEqual(event["kind"], "delivery_requested")
+            self.assertEqual({key: event["data"][key] for key in readiness}, readiness)
+            with self.assertRaises(LoopError) as error:
+                self.deliver(**readiness)
+            self.assertEqual(error.exception.code, "delivery_not_retryable")
+        self.runtime.on_send = check_pending_delivery
+        result = self.deliver(**readiness)
+        self.assertTrue(result["first_message_sent"])
+        self.assertEqual({key: result["delivery_attempt"][key] for key in readiness}, readiness)
+        self.assertEqual(len(self.runtime.sends), 1)
+        with self.assertRaises(LoopError):
+            self.deliver(**readiness)
+
+    def test_null_status_rejects_missing_invalid_or_stale_manual_readiness(self):
+        self.runtime.terminals[self.assignment["terminal"]].update(status=None, turn=2)
+        for readiness in ({}, {"ready_evidence": "Observed prompt"}, {"ready_turn": 2},
+                          {"ready_evidence": "  ", "ready_turn": 2},
+                          {"ready_evidence": "Observed prompt", "ready_turn": True},
+                          {"ready_evidence": "Observed prompt", "ready_turn": -1},
+                          {"ready_evidence": "Observed prompt", "ready_turn": 1},
+                          {"ready_evidence": "Observed prompt", "ready_turn": 2.0}):
+            with self.subTest(readiness=readiness):
+                with self.assertRaises(LoopError) as error:
+                    self.deliver(**readiness)
+                self.assertEqual(error.exception.code, "terminal_not_ready")
+                self.assertNotIn("delivery_attempt", self.store.get("assignments", self.assignment["id"]))
+        self.assertEqual(self.runtime.sends, [])
+
+    def test_manual_readiness_rejects_invalid_observed_turn(self):
+        terminal = self.runtime.terminals[self.assignment["terminal"]]
+        terminal["status"] = None
+        for turn in (True, None, "0", 0.0):
+            with self.subTest(turn=turn):
+                terminal["turn"] = turn
+                with self.assertRaises(LoopError) as error:
+                    self.deliver(ready_evidence="Observed prompt", ready_turn=0)
+                self.assertEqual(error.exception.code, "terminal_not_ready")
+        self.assertEqual(self.runtime.sends, [])
+
+    def test_manual_readiness_cannot_override_other_statuses_or_missing_status(self):
+        terminal = self.runtime.terminals[self.assignment["terminal"]]
+        terminal["turn"] = 0
+        for status in ("blocked", "working", "starting", "error", {},
+                       {"app": "cursor", "state": None}, {"app": "cursor", "state": "working"},
+                       {"app": "cursor", "state": "blocked"}):
+            with self.subTest(status=status):
+                terminal["status"] = status
+                with self.assertRaises(LoopError) as error:
+                    self.deliver(ready_evidence="Observed prompt", ready_turn=0)
+                self.assertEqual(error.exception.code, "terminal_not_ready")
+        terminal.pop("status")
+        with self.assertRaises(LoopError):
+            self.deliver(ready_evidence="Observed prompt", ready_turn=0)
+        self.assertEqual(self.runtime.sends, [])
+
+    def test_manual_readiness_cannot_override_finished_terminal_or_sent_task(self):
+        terminal = self.runtime.terminals[self.assignment["terminal"]]
+        terminal.update(status=None, turn=0, state="finished")
+        with self.assertRaises(LoopError):
+            self.deliver(ready_evidence="Observed prompt", ready_turn=0)
+        terminal.update(state="live", first_message={"sent": True})
+        with self.assertRaises(LoopError):
+            self.deliver(ready_evidence="Observed prompt", ready_turn=0)
+        self.assertEqual(self.runtime.sends, [])
+
+    def test_uncertain_manual_delivery_records_evidence_and_cannot_be_retried(self):
+        self.runtime.terminals[self.assignment["terminal"]].update(status=None, turn=0)
+        self.runtime.error = OSError("lost response")
+        readiness = {"ready_evidence": "Observed prompt", "ready_turn": 0}
+        with self.assertRaises(LoopError) as error:
+            self.deliver(**readiness)
+        self.assertEqual(error.exception.code, "delivery_unknown")
+        assignment = self.store.get("assignments", self.assignment["id"])
+        self.assertEqual(assignment["status"], "UNKNOWN")
+        self.assertEqual(assignment["delivery_attempt"]["ready_turn"], 0)
+        self.assertEqual(self.store.events(self.run["id"])[-1]["data"]["ready_evidence"], readiness["ready_evidence"])
+        self.service.assignments.reconcile(self.assignment["id"])
+        with self.assertRaises(LoopError):
+            self.deliver(**readiness)
+        self.assertEqual(len(self.runtime.sends), 1)
 
 
 if __name__ == "__main__":
