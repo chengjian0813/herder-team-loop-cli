@@ -119,6 +119,7 @@ herdr-team-loop-cli --actor "$PM_ID" run dispatch --run "$RUN_ID" --bug "$BUG_ID
 ## 恢复与停止
 
 - 投递不明：assignment reconcile 找原终端，assignment observe 读取输出；人工核对已送达后 confirm-delivery --evidence。原 Herdr 终端的领取可自动证明接收；不自动重发业务任务。
+- 已知未送达：原终端明确 `first_message.sent=false` 且已解决信任或权限对话、状态为 `idle/done` 后，由主控或人工执行 `assignment deliver --assignment ID`，向同一终端补投原任务一次；发送意图先持久化，响应不明则保持 UNKNOWN，禁止盲目重试。
 - 交接：assignment block --reason --checkpoint-file 保存断点，必要时 assignment terminate --checkpoint-file 结束本工具 worker 并保持 BLOCKED。核对在途结果后 run handoff --checkpoint-file --operations-checked 使用候补。
 - 无需交接：确认旧终端结束后 assignment retire --reason --checkpoint-file --operations-checked。查不到终端不等于已停止。
 - 主控接管：run takeover --old-pm-stopped --checkpoint-file --reason 更新 epoch，保留已有 worker，旧主控不能继续推进。

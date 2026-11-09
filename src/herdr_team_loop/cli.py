@@ -162,6 +162,7 @@ def _build_parser():
     entry = command("assignment", actions, "confirm-delivery", "Record observed evidence that the original task was delivered")
     assignment_id(entry)
     entry.add_argument("--evidence", required=True)
+    assignment_id(command("assignment", actions, "deliver", "Deliver the original task only when initial delivery is proven unsent"))
     entry = command("assignment", actions, "terminate", "Coordinator stops one worker; operation outcomes still need checking")
     assignment_id(entry)
     text_or_file(entry, "checkpoint", required=True)
@@ -351,9 +352,9 @@ class _Application:
         if command == "run":
             return self.run_command(action)
         if command == "assignment":
-            if action in ("reconcile", "observe", "confirm-delivery"):
+            if action in ("reconcile", "observe", "confirm-delivery", "deliver"):
                 assignment = self.object("assignments", args.assignment)
-                if args.actor and (action == "confirm-delivery" or args.actor != assignment["id"]):
+                if args.actor and (action in ("confirm-delivery", "deliver") or args.actor != assignment["id"]):
                     self.actor_for_run(assignment["run_id"], coordinator=True)
             else:
                 assignment = self.assignment(args.assignment, coordinator=action in ("retire", "terminate"))

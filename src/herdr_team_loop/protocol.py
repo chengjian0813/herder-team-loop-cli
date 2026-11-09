@@ -38,6 +38,7 @@ def protocol() -> dict:
                        "No daemon or automatic model wake-up; preserve checkpoint and resume coordination after interruption"],
         "recovery": ["assignment reconcile observes original execution; assignment observe reads terminal output",
                      "assignment confirm-delivery --evidence TEXT records verified receipt, never resends",
+                     "assignment deliver sends the original task once only when its managed terminal proves initial delivery false and is idle/done; an uncertain attempt must not be retried",
                      "assignment terminate preserves a blocked worker until operation checks and handoff/retirement",
                      "bug reassess --run ID --bug ID --evidence TEXT reuses an unchanged proposal after unrelated input changes",
                      "run resume --revalidate with checkpoint, --operations-checked and --old-owner-stopped schedules missing validation"],

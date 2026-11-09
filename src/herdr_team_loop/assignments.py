@@ -78,8 +78,10 @@ class AssignmentService:
     def launch(self, assignment_id: str) -> dict:
         assignment = self.store.get("assignments", assignment_id)
         require(assignment["status"] == "DISPATCHING", "dispatch_exists", "Dispatch already attempted; reconcile the original execution")
+        message = assignment.get("initial_message") or self.message(assignment)
+        assignment = self.store.update("assignments", assignment_id, {"initial_message": message})
         try:
-            result = self.runtime.launch(assignment, assignment["profile"], self.message(assignment), assignment["cwd"])
+            result = self.runtime.launch(assignment, assignment["profile"], message, assignment["cwd"])
         except (LoopError, OSError) as error:
             with self.store.transaction():
                 current = self.store.get("assignments", assignment_id)
@@ -192,6 +194,83 @@ class AssignmentService:
             result = self.store.update("assignments", assignment_id, {"first_message_sent": True, "delivery_evidence": evidence})
             self.store.event("delivery_confirmed", run_id=assignment["run_id"], assignment_id=assignment_id,
                              workspace_id=assignment["workspace_id"], data={"evidence": evidence})
+            return result
+
+    def _require_unsent(self, assignment: dict) -> dict:
+        run = self.store.get("runs", assignment["run_id"])
+        require(run["status"] == "ACTIVE", "run_not_ready", "Run is not accepting task delivery")
+        require(assignment["status"] == "STARTING" and assignment.get("terminal")
+                and not assignment.get("claimed_at") and not assignment.get("first_message_sent"),
+                "delivery_not_retryable", "Only an unclaimed, known-unsent task can be delivered")
+        require(not assignment.get("delivery_attempt"), "delivery_not_retryable", "Delivery was already attempted; inspect its outcome instead of resending")
+        require(assignment.get("runtime_observation", {}).get("first_message", {}).get("sent") is False,
+                "delivery_not_retryable", "Initial delivery is not known to be unsent")
+        if assignment["slot"] == "coordinator":
+            require(assignment["id"] == run.get("coordinator_id") and assignment["epoch"] == run["coordinator_epoch"],
+                    "stale_coordinator", "Coordinator has been replaced")
+        else:
+            require(assignment["phase"] == run["phase"] or assignment["phase"] == "investigate" and run["phase"] == "triage",
+                    "stale_phase", "Assignment no longer matches this run's phase")
+        check_budget(run)
+        require(fingerprint(run["repos"], run["baseline"], run["scope_digest"]) == assignment["fingerprint"],
+                "input_changed", "Assignment inputs changed before task delivery")
+        for proposal_id in assignment["proposal_ids"]:
+            proposal = self.store.get("proposals", proposal_id)
+            require(self.store.get("bugs", proposal["bug_id"]).get("current_proposal_id") == proposal_id,
+                    "stale_proposal", "Repair proposal changed before task delivery")
+        return run
+
+    def deliver(self, assignment_id: str) -> dict:
+        assignment = self.store.get("assignments", assignment_id)
+        self._require_unsent(assignment)
+        # Reconcile validates ownership labels. Do not send while trust/permission
+        # dialogs remain; the normal transport also refuses blocked terminals.
+        observed = self.runtime.reconcile(assignment)
+        require(observed and observed.get("terminal") == assignment["terminal"],
+                "terminal_mismatch", "Original managed terminal could not be verified")
+        state = observed.get("observation", {})
+        require(state.get("state") == "live" and state.get("first_message", {}).get("sent") is False,
+                "delivery_not_retryable", "Current terminal does not prove the original task was unsent")
+        status = state.get("status")
+        status = status.get("state") if isinstance(status, dict) else status
+        require(status in ("idle", "done"), "terminal_not_ready", "Resolve the terminal's current dialog or work before delivery")
+        with self.store.transaction():
+            assignment = self.store.get("assignments", assignment_id)
+            self._require_unsent(assignment)
+            # Older known-unsent records did not snapshot the message. Their frozen
+            # assignment/run inputs reconstruct it once; all attempts retain it.
+            message = assignment.get("initial_message") or self.message(assignment)
+            attempt = {"id": identifier("del"), "status": "SENDING", "started_at": time.time()}
+            self.store.update("assignments", assignment_id, {"initial_message": message, "delivery_attempt": attempt})
+            self.store.event("delivery_requested", run_id=assignment["run_id"], assignment_id=assignment_id,
+                             workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
+        try:
+            result = self.runtime.send(assignment["terminal"], message)
+            # hc 0.1.19 SendResult.turn records when the text went in. `started`
+            # only observes subsequent work and false/null is not an unsent result.
+            require(isinstance(result, dict) and "error" not in result
+                    and type(result.get("turn")) is int and result["turn"] >= 0,
+                    "delivery_unknown", "Herdr did not confirm when the task text was delivered")
+        except (LoopError, OSError) as error:
+            with self.store.transaction():
+                current = self.store.get("assignments", assignment_id)
+                received = bool(current.get("claimed_at") or current.get("first_message_sent"))
+                changes = {"delivery_attempt": {**attempt, "status": "SENT" if received else "UNKNOWN", "error": str(error)}}
+                if not received and current["status"] == "STARTING":
+                    changes["status"] = "UNKNOWN"
+                current = self.store.update("assignments", assignment_id, changes)
+                self.store.event("delivery_received" if received else "delivery_unknown", run_id=assignment["run_id"],
+                                 assignment_id=assignment_id, workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
+            if received:
+                return current
+            raise LoopError("delivery_unknown", "Task delivery is uncertain; inspect the original terminal and never resend blindly",
+                            details={"assignment_id": assignment_id}) from error
+        with self.store.transaction():
+            # Claim, completion or stop may have raced the transport response.
+            result = self.store.update("assignments", assignment_id, {
+                "first_message_sent": True, "delivery_attempt": {**attempt, "status": "SENT", "turn": result["turn"]}})
+            self.store.event("delivery_received", run_id=assignment["run_id"], assignment_id=assignment_id,
+                             workspace_id=assignment["workspace_id"], data={"delivery_id": attempt["id"]})
             return result
 
     def block(self, assignment_id: str, reason: str, checkpoint: str) -> dict:

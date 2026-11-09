@@ -243,6 +243,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(confirm.call_count, 2)
         confirm.assert_called_with(worker["id"], "Original terminal shows exact task")
 
+    def test_known_unsent_delivery_requires_coordinator_or_manual_operator(self):
+        workspace = self.initialize()
+        requirement = self.requirement()
+        _, coordinator, worker = self.seed_run(workspace, requirement)
+        arguments = ["assignment", "deliver", "--assignment", worker["id"]]
+        with patch("herdr_team_loop.assignments.AssignmentService.deliver",
+                   return_value={"first_message_sent": True}) as deliver:
+            result = self.invoke([*arguments, "--actor", worker["id"]], expected=2)
+            self.assertEqual(result["error"]["code"], "not_coordinator")
+            deliver.assert_not_called()
+            self.invoke([*arguments, "--actor", coordinator["id"]])
+            self.invoke(arguments)
+        self.assertEqual(deliver.call_count, 2)
+        deliver.assert_called_with(worker["id"])
+
     def test_terminate_routes_checkpoint_to_coordinator_service_without_retiring(self):
         workspace = self.initialize()
         requirement = self.requirement()
