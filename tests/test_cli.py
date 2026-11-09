@@ -288,6 +288,22 @@ class CliTests(unittest.TestCase):
             self.invoke(arguments)
             extend.assert_called_once_with(run["id"], 60.0, arguments[-3], arguments[-1])
 
+    def test_pending_input_submission_is_operator_only_and_routes_evidence(self):
+        workspace = self.initialize()
+        requirement = self.requirement()
+        _, coordinator, worker = self.seed_run(workspace, requirement)
+        evidence = self.root / "pending-input.md"
+        evidence.write_text("Original task is the pending pasted input, observed at turn 0.")
+        arguments = ["assignment", "submit-pending", "--assignment", worker["id"],
+                     "--evidence-file", evidence, "--observed-turn", "0"]
+        with patch("herdr_team_loop.assignments.AssignmentService.submit_pending", return_value={"status": "STARTING"}) as submit:
+            for actor in (coordinator, worker):
+                denied = self.invoke([*arguments, "--actor", actor["id"]], expected=2)
+                self.assertEqual(denied["error"]["code"], "manual_recovery_required")
+            submit.assert_not_called()
+            self.invoke(arguments)
+            submit.assert_called_once_with(worker["id"], evidence.read_text(), 0)
+
     def test_budget_extension_requires_explicit_reason_and_source(self):
         for suffix in ([], ["--reason", "Recovery"], ["--authorization-source", "User reply"]):
             result = self.cli("run", "extend-budget", "--run", "unused", "--active-minutes", "60", *suffix, expected=2)

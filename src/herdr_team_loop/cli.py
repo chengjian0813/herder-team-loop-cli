@@ -171,6 +171,10 @@ def _build_parser():
     assignment_id(entry)
     text_or_file(entry, "ready-evidence")
     entry.add_argument("--ready-turn", type=int, help="Observed original terminal turn; required with manual readiness evidence when status is null")
+    entry = command("assignment", actions, "submit-pending", "Submit the observed original pasted task once without pasting it again")
+    assignment_id(entry)
+    text_or_file(entry, "evidence", required=True)
+    entry.add_argument("--observed-turn", type=int, required=True)
     entry = command("assignment", actions, "terminate", "Coordinator stops one worker; operation outcomes still need checking")
     assignment_id(entry)
     text_or_file(entry, "checkpoint", required=True)
@@ -360,14 +364,18 @@ class _Application:
         if command == "run":
             return self.run_command(action)
         if command == "assignment":
-            if action in ("reconcile", "observe", "confirm-delivery", "deliver"):
+            if action in ("reconcile", "observe", "confirm-delivery", "deliver", "submit-pending"):
                 assignment = self.object("assignments", args.assignment)
+                if action == "submit-pending":
+                    require(not args.actor, "manual_recovery_required", "Submitting an observed pending input requires the initiating operator, not an assignment actor")
                 if args.actor and (action in ("confirm-delivery", "deliver") or args.actor != assignment["id"]):
                     self.actor_for_run(assignment["run_id"], coordinator=True)
             else:
                 assignment = self.assignment(args.assignment, coordinator=action in ("retire", "terminate"))
             if action == "confirm-delivery":
                 return self.runs.assignments.confirm_delivery(assignment["id"], args.evidence)
+            if action == "submit-pending":
+                return self.runs.assignments.submit_pending(assignment["id"], _text_argument(args, "evidence"), args.observed_turn)
             if action == "deliver":
                 ready_evidence = _text_argument(args, "ready_evidence")
                 if ready_evidence or args.ready_turn is not None:

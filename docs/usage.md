@@ -121,6 +121,7 @@ herdr-team-loop-cli --actor "$PM_ID" run dispatch --run "$RUN_ID" --bug "$BUG_ID
 - 投递不明：assignment reconcile 找原终端，assignment observe 读取输出；人工核对已送达后 confirm-delivery --evidence。原 Herdr 终端的领取可自动证明接收；不自动重发业务任务。
 - 已知未送达：原终端明确 `first_message.sent=false` 且已解决信任或权限对话、状态为 `idle/done` 后，由主控或人工执行 `assignment deliver --assignment ID`，向同一终端补投原任务一次；发送意图先持久化，响应不明则保持 UNKNOWN，禁止盲目重试。
 - 未上报状态：只有明确 `status=null` 时，发起方核对原终端已进入空输入提示、信任/权限对话已结束，再用 `assignment deliver --assignment ID --ready-evidence-file PATH --ready-turn N` 记录证据并绑定当前 turn。不能带 assignment actor，不能用它绕过 working/blocked 或未知投递；证据不能代替真实观察。
+- 原任务仅被粘贴：已确认发送且尚未领取，实际画面仍为该原任务的待提交输入时，发起方用 `assignment submit-pending --assignment ID --evidence-file PATH --observed-turn N`。它要求原发送记录和当前 turn 一致，只发送一次 Enter，绝不重贴文本；有对话、输入变化或结果不明时禁止使用/重试。领取与执行仍须另行观察，按键成功不代表完成。
 - 交接：assignment block --reason --checkpoint-file 保存断点，必要时 assignment terminate --checkpoint-file 结束本工具 worker 并保持 BLOCKED。核对在途结果后 run handoff --checkpoint-file --operations-checked 使用候补。
 - 无需交接：确认旧终端结束后 assignment retire --reason --checkpoint-file --operations-checked。查不到终端不等于已停止。
 - 主控接管：run takeover --old-pm-stopped --checkpoint-file --reason 更新 epoch，保留已有 worker，旧主控不能继续推进。

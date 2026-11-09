@@ -184,6 +184,16 @@ class HerdrRuntime:
     def interrupt(self, terminal) -> dict:
         return self._json(["interrupt", "--json", self._terminal(terminal)])
 
+    def submit(self, terminal) -> dict:
+        """Submit an operator-verified pending input without pasting it again."""
+        try:
+            return self._json(["keys", "--json", self._terminal(terminal), "enter"])
+        except LoopError as error:
+            if error.code in ("runtime_timeout", "runtime_protocol"):
+                raise LoopError("submission_unknown", "Pending input submission is uncertain; inspect before retrying",
+                                details={"terminal": terminal}) from error
+            raise
+
     def terminate(self, terminal) -> dict:
         return self._json(["kill", "--json", self._terminal(terminal)])
 

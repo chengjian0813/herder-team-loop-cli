@@ -205,6 +205,9 @@ class AssignmentService:
         require(not assignment.get("delivery_attempt"), "delivery_not_retryable", "Delivery was already attempted; inspect its outcome instead of resending")
         require(assignment.get("runtime_observation", {}).get("first_message", {}).get("sent") is False,
                 "delivery_not_retryable", "Initial delivery is not known to be unsent")
+        return self._require_current_assignment(assignment, run)
+
+    def _require_current_assignment(self, assignment: dict, run: dict) -> dict:
         if assignment["slot"] == "coordinator":
             require(assignment["id"] == run.get("coordinator_id") and assignment["epoch"] == run["coordinator_epoch"],
                     "stale_coordinator", "Coordinator has been replaced")
@@ -283,6 +286,75 @@ class AssignmentService:
             self.store.event("delivery_received", run_id=assignment["run_id"], assignment_id=assignment_id,
                              workspace_id=assignment["workspace_id"], data=event_data)
             return result
+
+    def _require_pending_submission(self, assignment: dict, observed_turn: int) -> dict:
+        run = self.store.get("runs", assignment["run_id"])
+        require(run["status"] == "ACTIVE", "run_not_ready", "Run is not accepting task submission")
+        delivery = assignment.get("delivery_attempt")
+        require(assignment["status"] == "STARTING" and assignment.get("terminal")
+                and not assignment.get("claimed_at") and assignment.get("first_message_sent") is True
+                and isinstance(assignment.get("initial_message"), str) and assignment["initial_message"].strip()
+                and isinstance(delivery, dict) and delivery.get("status") == "SENT"
+                and type(delivery.get("turn")) is int and delivery["turn"] == observed_turn,
+                "submission_not_retryable", "Only an unclaimed task delivered at the observed turn can be submitted")
+        require(not assignment.get("submission_attempt"), "submission_not_retryable",
+                "Submission was already attempted; inspect its outcome instead of pressing Enter again")
+        return self._require_current_assignment(assignment, run)
+
+    def submit_pending(self, assignment_id: str, evidence: str, observed_turn: int) -> dict:
+        require(isinstance(evidence, str) and evidence.strip(), "missing_evidence",
+                "Describe how the original task was verified to remain pasted but unsubmitted")
+        require(type(observed_turn) is int and observed_turn >= 0, "invalid_turn", "Observed turn must be a nonnegative integer")
+        assignment = self.store.get("assignments", assignment_id)
+        self._require_pending_submission(assignment, observed_turn)
+        observed = self.runtime.reconcile(assignment)
+        require(observed and observed.get("terminal") == assignment["terminal"],
+                "terminal_mismatch", "Original managed terminal could not be verified")
+        state = observed.get("observation", {})
+        raw_status = state.get("status")
+        status = raw_status.get("state") if isinstance(raw_status, dict) else raw_status
+        require(state.get("state") == "live" and "status" in state
+                and (raw_status is None or status in ("idle", "done")),
+                "terminal_not_ready", "Original terminal is not ready to submit the pending task")
+        require(type(state.get("turn")) is int and state["turn"] == observed_turn,
+                "stale_turn", "Terminal turn changed since the pending task was observed")
+        with self.store.transaction():
+            assignment = self.store.get("assignments", assignment_id)
+            self._require_pending_submission(assignment, observed_turn)
+            attempt = {"id": identifier("sub"), "status": "SENDING", "started_at": time.time(),
+                       "evidence": evidence.strip(), "observed_turn": observed_turn}
+            event_data = {"submission_id": attempt["id"], "evidence": attempt["evidence"], "observed_turn": observed_turn}
+            self.store.update("assignments", assignment_id, {"submission_attempt": attempt})
+            self.store.event("submission_requested", run_id=assignment["run_id"], assignment_id=assignment_id,
+                             workspace_id=assignment["workspace_id"], data=event_data)
+        try:
+            # The task text is already in the original terminal; only Enter is sent.
+            result = self.runtime.submit(assignment["terminal"])
+            require(isinstance(result, dict) and "error" not in result
+                    and type(result.get("turn")) is int and result["turn"] >= 0,
+                    "submission_unknown", "Herdr did not confirm when Enter was delivered")
+        except (LoopError, OSError) as error:
+            with self.store.transaction():
+                current = self.store.get("assignments", assignment_id)
+                # first_message_sent predates this Enter; only a claim proves receipt.
+                received = bool(current.get("claimed_at"))
+                changes = {"submission_attempt": {**attempt, "status": "SENT" if received else "UNKNOWN", "error": str(error)}}
+                if not received and current["status"] == "STARTING":
+                    changes["status"] = "UNKNOWN"
+                current = self.store.update("assignments", assignment_id, changes)
+                self.store.event("submission_received" if received else "submission_unknown", run_id=assignment["run_id"],
+                                 assignment_id=assignment_id, workspace_id=assignment["workspace_id"], data=event_data)
+            if received:
+                return current
+            raise LoopError("submission_unknown", "Task submission is uncertain; inspect the original terminal and do not press Enter again",
+                            details={"assignment_id": assignment_id}) from error
+        with self.store.transaction():
+            # Preserve any claim, completion or stop that raced the transport response.
+            updated = self.store.update("assignments", assignment_id, {
+                "submission_attempt": {**attempt, "status": "SENT", "turn": result["turn"]}})
+            self.store.event("submission_received", run_id=assignment["run_id"], assignment_id=assignment_id,
+                             workspace_id=assignment["workspace_id"], data={**event_data, "turn": result["turn"]})
+            return updated
 
     def block(self, assignment_id: str, reason: str, checkpoint: str) -> dict:
         require(reason.strip() and checkpoint.strip(), "missing_checkpoint", "Block requires a reason and checkpoint")

@@ -80,6 +80,8 @@ elif command == 'read':
     print('fixture screen'); sys.exit()
 elif command == 'attach':
     sys.exit(6)
+elif command == 'keys':
+    result = {'turn':4,'status':None}
 else:
     result = {'address':'t7','operation':command}
 print(json.dumps(result))
@@ -130,6 +132,17 @@ class HerdrRuntimeTests(unittest.TestCase):
         self.runtime.env["FAKE_HC_MODE"] = "unsent"
         self.assertFalse(self.launch()["first_message_sent"])
         self.assertEqual([call[0] for call in self.calls()], ["run"])
+
+    def test_pending_submission_presses_enter_once_without_pasting(self):
+        self.assertEqual(self.runtime.submit("t7"), {"turn": 4, "status": None})
+        self.assertEqual(self.calls(), [["keys", "--json", "t7", "enter"]])
+
+    def test_pending_submission_keeps_transport_uncertainty_and_never_retries(self):
+        self.runtime.env["FAKE_HC_MODE"] = "garbled"
+        with self.assertRaises(LoopError) as error:
+            self.runtime.submit("t7")
+        self.assertEqual(error.exception.code, "submission_unknown")
+        self.assertEqual(self.calls(), [["keys", "--json", "t7", "enter"]])
 
     def test_uncertain_launch_never_retries(self):
         for mode in ("fail", "garbled", "missing-delivery", "timeout"):
