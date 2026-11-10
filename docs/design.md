@@ -1,8 +1,6 @@
 # herdr-team-loop-cli：需求、架构与使用流程
 
-状态：已批准的设计基线，2026-11-08。v0.1 已落地；本文保留原设计推导，实际命令和当前限制见 [使用指南](usage.md) 与 [README](../README.md)。后续迁移、导入等规划不代表已实现。
-
-CLI 名称为 `herdr-team-loop-cli`；GitHub 私有仓库名称为 `herder-team-loop-cli`。两种拼写按用户要求分别保留。
+状态：已批准的设计基线，2026-11-08。v0.1 已落地；本文保留原设计推导，实际命令和当前限制见 [使用指南](usage.md) 与 [README](../README.md)。后续迁移、导入等规划不代表已实现。CLI 与 GitHub 仓库名均为 `herdr-team-loop-cli`。
 
 ## 1. 已确定的目标与本次建议
 

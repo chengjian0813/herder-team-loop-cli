@@ -1,8 +1,8 @@
-# herder-team-loop-cli
+# herdr-team-loop-cli
 
 用 Herdr 运行按 workspace 配置角色的 agent 团队，由统一 CLI 管理需求、派工、证据、Bug 决策和有界修复循环。
 
-- 命令：`herdr-team-loop-cli`；仓库：`herder-team-loop-cli`，分别保留项目发起者指定的拼写。
+- 命令与仓库名均为 `herdr-team-loop-cli`。
 - **v0.1 已实现**，Python 3.11+，运行时仅依赖标准库。执行后端需要本机 `hc`；集成核对版本为 0.1.18。
 - 任意 agent 可发起初始化；coordinator、developer、reviewer、tester 按 workspace 显式配置，支持候补。
 - SQLite 是唯一状态源；正文保存为不可变 artifact。归属为 `workspace → requirement → run → assignment`。
