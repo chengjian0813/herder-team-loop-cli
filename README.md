@@ -15,6 +15,15 @@
 uv tool install .
 # 或
 pipx install .
+# 或（如果没有 uv/pipx）
+pip install --user .
+```
+
+使用 `pip install --user` 时，命令会安装到 `~/.local/bin`，需确保该目录在 PATH 中：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+# 可添加到 ~/.bashrc 或 ~/.zshrc 使其永久生效
 ```
 
 安装不初始化业务 workspace、不启动模型、不覆盖旧团队 Skill。worker 的启动消息绑定当前 CLI 的 Python 解释器和数据目录。
