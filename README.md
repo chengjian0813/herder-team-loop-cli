@@ -100,13 +100,32 @@ flowchart LR
 
 ## 开发与验证
 
+单元测试：
+
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
-uv build
-# 可选：只启动临时 Python OSC 夹具，不启动模型
-PYTHONPATH=src python3 tools/smoke_herdr.py
 ```
 
-测试覆盖存储、归属、配置冻结、Git 指纹、CLI、决定门禁、完整修复流程与中断恢复。原生 smoke 使用独立 Herdr session、临时配置和临时仓，不操作现有业务会话。
+单元测试覆盖存储、归属、配置冻结、Git 指纹、CLI、决定门禁、完整修复流程与中断恢复。CI 自动运行单元测试。
+
+构建：
+
+```bash
+uv build
+```
+
+### Smoke 测试（可选）
+
+`tools/smoke_herdr.py` 通过真实的 Herdr 执行和审查工作流验证端到端集成，但不启动模型。它使用独立的 Herdr session、临时配置和临时仓库，不操作现有业务会话。
+
+**前置条件**：需要本机安装 `hc` 命令（Herdr CLI 0.1.18 或更高版本）。关于如何获取 `hc`，请参考 Herdr 官方文档。
+
+运行：
+
+```bash
+PYTHONPATH=src python3 tools/smoke_herdr.py --evidence-out /tmp/smoke.json
+```
+
+smoke 测试是可选的，主要用于验证与 Herdr 的真实集成。贡献者无需运行 smoke 测试即可提交代码；CI 不运行 smoke 测试。
 
 [已批准设计](docs/design.md) 保留背景，当前接口与限制以使用指南为准。旧任务自动导入、业务 workspace 自动迁移、离线通知和多主机共享数据库不包含在 v0.1。
